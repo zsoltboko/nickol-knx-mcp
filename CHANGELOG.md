@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bus-monitor recording analysis — six tools** (tool count **31 → 37**; new `telegramlog.py`,
+  `server.py`, `tests/test_telegramlog.py`). Reads an ETS `CommunicationLog` XML export and decodes it
+  *against the loaded project*, which is what turns raw CommonEMI frames into named group addresses,
+  typed values and — crucially — **expected** senders. Still no bus connectivity: this reads a file.
+
+  `load_telegram_log` streams the document (`iterparse` + `clear()`), so a multi-gigabyte capture never
+  lands in memory; a 20 MB / 119k-telegram recording peaks at 13 MB. `log_overview`, `log_ga_activity`,
+  `log_series`, `log_reality_check` and `log_telegrams` query it.
+
+  **`log_reality_check` answers what a project alone cannot:** which devices transmit that are absent
+  from ETS entirely (a visualisation server or gateway with no application is invisible to the project
+  but very much on the bus); which "nothing sends this" addresses really do get written, and by whom;
+  where an address has writers the project does not expect; and what never appeared — the last reported
+  with the caveat that silence over a short recording is not evidence of a dead function.
+
+  **Context economy is a design constraint, not an afterthought.** Aggregates are built during the
+  streaming pass and are always complete, while the record store can be reduced independently:
+  `change_only` keeps a telegram only when the value on that address changed (72% reduction on a real
+  capture), `dedupe_window` turns that into "every change plus a heartbeat every N seconds",
+  `since`/`until` accept an ISO timestamp or an offset from the start (`+90m`), and `max_records` caps
+  the store — with `from_end` to keep the tail. No tool returns telegrams by default; `log_telegrams`
+  is capped at 200 and refuses with the match count rather than truncating silently.
+
+  **Datapoint types are resolved by provenance, not guessed silently.** Order: the GA's own DPT >
+  a linked communication object's DPT > a user override > inference from payload width + object
+  function text > unknown. Every decoded value carries `dpt_source`, so an `inferred` value is
+  visibly a deduction; a payload that doesn't match its type falls back to raw hex rather than
+  producing a plausible wrong number. This matters in practice — projects that never set GA-level
+  DPTs are common, and that is exactly when a recording is most needed.
+
 - **`check_topology()` — topology & individual-address sanity, grounded in the KNX standard** (tool
   count **30 → 31**; `analyze.py`, `server.py`). Flags devices-per-line over the TP1 limits (info at
   >64 per segment, warning at >256 per line — KNX Handbook p.36/40/55), individual addresses that
