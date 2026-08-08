@@ -102,7 +102,7 @@ The recommended full setup is four layers; only one needs to be built from scrat
 | 1. Live | states, control, debugging a running house | **official Home Assistant MCP Server** + KNX (XKNX) integration | No, already exists |
 | 2. **Design-time** | parse `.knxproj`, validate DPT/naming/status + GA-intent de-noise, generate HA YAML (colour lights + climate assembled) & ETS XML/CSV | **`nickol-knx-mcp` (this package)** | **YES — this is the gap** |
 | 3. Files + Git | YAML/CSV/XML, versioning the address schema | standard filesystem + git MCP servers | No, already exists |
-| 4. Skill | design rules (GA structure, naming, DPT, scenes) + ops discipline | `CLAUDE.md` + [`skills/`](skills/ha-git-backup) (ha-git-backup ops companion) | No, included |
+| 4. Skill | *when* to use which of the 37 tools + how to read their confidence claims; design rules (GA structure, naming, DPT, scenes); post-deploy ops discipline | [`skills/nickol-knx`](skills/nickol-knx) (workflow) + `CLAUDE.md` (design rules) + [`skills/ha-git-backup`](skills/ha-git-backup) (ops companion) | No, included |
 
 > **Safety by design:** layer 2 (this server) **physically cannot** connect to a bus. It has no
 > network/bus dependency at all — it only reads `.knxproj` and writes files into a confined
@@ -239,7 +239,15 @@ nickol-knx-mcp                    # start the MCP server (stdio)
 ### Claude Desktop
 
 `examples/claude_desktop_config.json` wires up nickol-knx + filesystem + git + home-assistant.
-Minimal fragment (macOS config path: `~/Library/Application Support/Claude/claude_desktop_config.json`):
+Config file location:
+
+| OS | `claude_desktop_config.json` |
+|----|------------------------------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+Minimal fragment:
 
 ```json
 {
@@ -260,9 +268,17 @@ claude mcp add nickol-knx \
   -- /absolute/path/to/.venv/bin/nickol-knx-mcp
 ```
 
-Then drop `CLAUDE.md` into your project root — it acts as an ETS Assistant skill (design rules,
-safety rules, 3-level GA structure, command/status pairing, DPT discipline, naming, KNX Secure
-keyring handling, and the recommended workflow).
+Then drop `CLAUDE.md` into your project root — the design playbook (safety rules, 3-level GA
+structure, command/status pairing, DPT discipline, naming, KNX Secure keyring handling).
+
+### The workflow skill
+
+The tools are the capability; [`skills/nickol-knx`](skills/nickol-knx) is the **order to use
+them in and how to read what they return** — the state model, the route table per starting
+point, and the confidence-tier rules (`explain_ga` provenance, `dpt_source`, the `silent`
+caveat on a recording). Install it into `~/.claude/skills/` for Claude Code, or zip it for
+Claude Desktop — Desktop reads neither this repo's `skills/` directory nor `CLAUDE.md`. See
+[`skills/nickol-knx/README.md`](skills/nickol-knx/README.md).
 
 ---
 
@@ -408,8 +424,9 @@ nickol-knx-mcp/
 ├── tests/test_telegramlog.py
 ├── examples/claude_desktop_config.json
 ├── skills/
+│   ├── nickol-knx/       # workflow skill: tool orchestration + how to read the results
 │   └── ha-git-backup/    # ops companion: 2-circuit HA backup (git history + encrypted offsite)
-├── CLAUDE.md             # ETS Assistant skill / playbook
+├── CLAUDE.md             # design playbook (GA structure, DPT, naming, Secure)
 ├── pyproject.toml
 └── README.md
 ```

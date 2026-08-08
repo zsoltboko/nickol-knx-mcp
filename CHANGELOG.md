@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`skills/nickol-knx` — the workflow skill.** The 37 tools were the capability; nothing carried the
+  *order to use them in* or the rules for reading what they return. `CLAUDE.md` names only 5 tools in
+  its workflow, has no frontmatter to trigger on, and is never loaded by Claude Desktop at all; the
+  README's tool table never reaches the model's context. So `explain_ga`'s provenance tiers,
+  `check_policy`'s inferred-taxonomy semantics, `grade_completeness`, `check_device_parameters` and the
+  entire six-tool log-forensics group had no usage guidance anywhere a model would read it.
+
+  A short `SKILL.md` (iron rules, the `load_project`-first state model, a route table by starting
+  point, and the confidence-tier rules) plus six `references/` files that load only when that path is
+  taken: `audit`, `repair`, `generate`, `log-forensics`, `compose`, `design-rules`.
+
+  **The cross-cutting rule it enforces is that graded evidence stays graded.** `explain_ga` ranks
+  signals authoritative (ETS Function) > structural (DPT) > heuristic (name) and reports
+  `confidence: contested` when they disagree; `log_ga_activity` reports `dpt_source`. An `inferred`
+  DPT and a `silent` group address
+  are deductions, and the skill's acceptance test is whether a fresh session says so unprompted.
+
+  Design rules stay in `CLAUDE.md` as the single source — `references/design-rules.md` indexes and
+  points at it rather than copying, so the two cannot drift apart.
+
 - **Bus-monitor recording analysis — six tools** (tool count **31 → 37**; new `telegramlog.py`,
   `server.py`, `tests/test_telegramlog.py`). Reads an ETS `CommunicationLog` XML export and decodes it
   *against the loaded project*, which is what turns raw CommonEMI frames into named group addresses,
