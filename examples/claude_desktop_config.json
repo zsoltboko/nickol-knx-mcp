@@ -1,5 +1,5 @@
 {
-  "_comment": "Full KNX toolchain. Layer 1 (live HA) is optional and only needed once the house is running. Layers 2-4 are the design-time core. macOS path for Claude Desktop config: ~/Library/Application Support/Claude/claude_desktop_config.json. For Claude Code, put the mcpServers block in .mcp.json at your project root.",
+  "_comment": "Full KNX toolchain. Layer 1 (live HA) is optional and only needed once the house is running. Layers 2-4 are the design-time core. Claude Desktop config path: macOS ~/Library/Application Support/Claude/claude_desktop_config.json | Windows %APPDATA%\\Claude\\claude_desktop_config.json | Linux ~/.config/Claude/claude_desktop_config.json. For Claude Code, put the mcpServers block in .mcp.json at your project root. Layer 4 (skills) is separate from this file: see skills/nickol-knx/README.md.",
   "mcpServers": {
     "nickol-knx": {
       "command": "uv",

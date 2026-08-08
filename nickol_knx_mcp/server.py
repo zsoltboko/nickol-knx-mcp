@@ -36,13 +36,14 @@ from .policy import (check_policy as _check_policy, load_policy as _load_policy,
                      example_policy_yaml as _example_policy_yaml)
 from .explain import explain_ga as _explain_ga
 from . import room_library as _room_library
+from . import telegramlog as _tlog
 
 mcp = FastMCP("nickol-knx")
 
 # --------------------------------------------------------------------------- #
 # State + safety helpers
 # --------------------------------------------------------------------------- #
-_STATE: dict[str, Optional[LoadedProject]] = {"project": None}
+_STATE: dict[str, Any] = {"project": None, "log": None}
 
 # Output writes are confined to this directory (default: ./knx-workspace).
 _WORKSPACE = Path(os.environ.get("NICKOL_KNX_WORKSPACE", "./knx-workspace")).resolve()
@@ -566,6 +567,184 @@ def compose_rooms(rooms: list[dict[str, Any]], language: str = "ru",
         }
         out["written"] = written
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Bus-monitor recording (read-only; still no bus connectivity)
+# --------------------------------------------------------------------------- #
+# A recording shows what a system ACTUALLY does, including logic that lives
+# outside ETS entirely. These tools decode it against the loaded project and
+# return aggregates — never a telegram dump — so a multi-day capture stays usable.
+def _log() -> "_tlog.LogView":
+    view = _STATE.get("log")
+    if view is None:
+        raise ValueError("No recording loaded. Call load_telegram_log(path) first.")
+    return view
+
+
+@mcp.tool()
+def load_telegram_log(path: str, since: Optional[str] = None,
+                      until: Optional[str] = None,
+                      max_records: Optional[int] = None,
+                      from_end: bool = False,
+                      change_only: bool = True,
+                      dedupe_window: float = 0.0) -> dict[str, Any]:
+    """Load an ETS bus-monitor recording (CommunicationLog XML) and cache it.
+
+    Requires a loaded project: the raw frames carry addresses and bytes, and only
+    the .knxproj turns those into names, datapoint types and expected senders.
+
+    Returns a summary only — never telegrams. Parsing streams the file, so size is
+    not a memory concern; the knobs below bound what is *kept* for later queries.
+
+    Args:
+        path: the recording (.xml).
+        since/until: ISO timestamp (2026-07-14T10:30:00Z) or an offset from the
+            recording's start (+90m, -2h). Applied before decoding.
+        max_records: cap on kept records (counts stay complete regardless).
+        from_end: with max_records, keep the tail instead of the head.
+        change_only: keep a telegram only when the value on that group address
+            changed. Default on — typically an order-of-magnitude reduction.
+        dedupe_window: seconds. With change_only, re-admits an unchanged value
+            this often (a heartbeat, so flat signals stay visible in a series).
+    """
+    proj = _project()
+    try:
+        log = _tlog.parse_log(path, since=since, until=until,
+                              max_records=max_records, from_end=from_end,
+                              change_only=change_only, dedupe_window=dedupe_window)
+    except _tlog.TelegramLogError as e:
+        return {"error": str(e)}
+    view = _tlog.LogView(log, proj)
+    _STATE["log"] = view
+    unknown = sorted(_tlog.individual_address(s) for s in log.src_count
+                     if not view.is_known_device(_tlog.individual_address(s)))
+    return {
+        "loaded": True,
+        "path": path,
+        "project": proj.info.get("name"),
+        "from": log.iso(log.first_ts),
+        "to": log.iso(log.last_ts),
+        "duration_minutes": round(log.duration_s / 60, 1),
+        "telegrams_in_file": log.total_seen,
+        "telegrams_in_window": log.total_in_window,
+        "decoded": log.total_decoded,
+        "skipped_undecodable": log.skipped_undecodable,
+        "records_kept": len(log),
+        "reduction_percent": (round(100 * (1 - len(log) / log.total_decoded), 1)
+                              if log.total_decoded else 0.0),
+        "truncated": log.truncated,
+        "distinct_group_addresses": len(log.ga_count),
+        "distinct_senders": len(log.src_count),
+        "unknown_senders": unknown,
+        "hint": ("Senders absent from the project are the interesting ones — a "
+                 "visualisation server or gateway with no ETS application. Start "
+                 "with log_reality_check()." if unknown else
+                 "Every sender is a known project device. Start with log_overview()."),
+    }
+
+
+@mcp.tool()
+def log_overview(top: int = 20) -> dict[str, Any]:
+    """What is in the recording: traffic by main group, by device, busiest addresses."""
+    return _tlog.overview(_log(), top=max(1, min(int(top), 100)))
+
+
+@mcp.tool()
+def log_ga_activity(ga: Optional[str] = None, limit: int = 50,
+                    senderless_only: bool = False,
+                    unexpected_sender_only: bool = False,
+                    min_count: int = 0) -> list[dict[str, Any]]:
+    """Per-group-address digest: traffic, senders, value range, datapoint provenance.
+
+    Args:
+        ga: exact address (6/2/5), a prefix (6/2 or 6/), or a zone-template
+            wildcard (7/x/8 = that sub-address across every middle group).
+        senderless_only: only addresses the project says nothing transmits on —
+            i.e. where an observed sender proves an external writer exists.
+        unexpected_sender_only: only addresses written by someone the project
+            does not list as a transmitter.
+        min_count: ignore addresses below this telegram count.
+
+    Every numeric value carries `dpt_source`: 'project'/'object' means the type is
+    declared, 'inferred' means it was deduced from payload width and object
+    function — a deduction, not a fact.
+    """
+    return _tlog.ga_stats(_log(), ga=ga, limit=max(1, min(int(limit), 300)),
+                          senderless_only=senderless_only,
+                          unexpected_sender_only=unexpected_sender_only,
+                          min_count=max(0, int(min_count)))
+
+
+@mcp.tool()
+def log_series(gas: list[str], max_points: int = 200,
+               agg: str = "last") -> dict[str, Any]:
+    """Time series for one or more group addresses, bucketed to at most max_points.
+
+    All requested addresses share identical time buckets, so two signals can be
+    compared directly — which is how a control loop that exists in no documentation
+    gets found (e.g. a setpoint that tracks a measured dew point).
+
+    Args:
+        gas: addresses or patterns, same syntax as log_ga_activity.
+        max_points: per-series cap (2..2000). Downsampling is mandatory.
+        agg: 'last' (default), 'mean', 'min' or 'max' within each bucket.
+    """
+    return _tlog.series(_log(), gas, max_points=int(max_points), agg=agg)
+
+
+@mcp.tool()
+def log_reality_check(limit: int = 60) -> dict[str, Any]:
+    """Compare what the bus actually did against what the project says it should.
+
+    Answers four questions the project alone cannot: who transmits that is not in
+    ETS at all; which "nothing sends this" addresses really do get written, and by
+    whom; where an address has senders the project does not expect; and what never
+    appeared — the last one reported with the caveat that silence over a short
+    recording is not evidence of a dead function.
+    """
+    return _tlog.reality_check(_log(), limit=max(1, min(int(limit), 300)))
+
+
+@mcp.tool()
+def log_telegrams(ga: Optional[str] = None, src: Optional[str] = None,
+                  since: Optional[str] = None, until: Optional[str] = None,
+                  limit: int = 100) -> dict[str, Any]:
+    """Decoded individual telegrams — last resort, hard-capped at 200.
+
+    Prefer log_ga_activity / log_series: they answer most questions at a fraction
+    of the size. If a filter matches more than the cap this refuses and reports the
+    match count rather than silently truncating, so a narrower filter can be chosen.
+    """
+    view = _log()
+    limit = max(1, min(int(limit), 200))
+    try:
+        idxs = view.indices(ga=ga, src=src, since=since, until=until)
+    except _tlog.TelegramLogError as e:
+        return {"error": str(e)}
+    if len(idxs) > limit:
+        return {
+            "error": f"filter matches {len(idxs)} records, over the {limit} cap",
+            "matches": len(idxs),
+            "hint": "narrow with ga/src/since/until, or use log_ga_activity for a digest",
+        }
+    log = view.log
+    out = []
+    for i in idxs:
+        addr = _tlog.group_address(log.dst[i])
+        val, unit, dpt = view.value_at(i)
+        row = {
+            "time": log.iso(log.ts[i]),
+            "src": _tlog.individual_address(log.src[i]),
+            "ga": addr,
+            "name": view.ga_name(addr),
+            "service": _tlog._APCI_NAME[log.apci[i]],
+        }
+        if log.apci[i] != _tlog.APCI_READ:
+            row.update(value=val, unit=unit, dpt=dpt.key or None,
+                       dpt_source=dpt.source)
+        out.append(row)
+    return {"count": len(out), "telegrams": out}
 
 
 @mcp.tool()

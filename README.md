@@ -102,7 +102,7 @@ The recommended full setup is four layers; only one needs to be built from scrat
 | 1. Live | states, control, debugging a running house | **official Home Assistant MCP Server** + KNX (XKNX) integration | No, already exists |
 | 2. **Design-time** | parse `.knxproj`, validate DPT/naming/status + GA-intent de-noise, generate HA YAML (colour lights + climate assembled) & ETS XML/CSV | **`nickol-knx-mcp` (this package)** | **YES — this is the gap** |
 | 3. Files + Git | YAML/CSV/XML, versioning the address schema | standard filesystem + git MCP servers | No, already exists |
-| 4. Skill | design rules (GA structure, naming, DPT, scenes) + ops discipline | `CLAUDE.md` + [`skills/`](skills/ha-git-backup) (ha-git-backup ops companion) | No, included |
+| 4. Skill | *when* to use which of the 37 tools + how to read their confidence claims; design rules (GA structure, naming, DPT, scenes); post-deploy ops discipline | [`skills/nickol-knx`](skills/nickol-knx) (workflow) + `CLAUDE.md` (design rules) + [`skills/ha-git-backup`](skills/ha-git-backup) (ops companion) | No, included |
 
 > **Safety by design:** layer 2 (this server) **physically cannot** connect to a bus. It has no
 > network/bus dependency at all — it only reads `.knxproj` and writes files into a confined
@@ -239,7 +239,15 @@ nickol-knx-mcp                    # start the MCP server (stdio)
 ### Claude Desktop
 
 `examples/claude_desktop_config.json` wires up nickol-knx + filesystem + git + home-assistant.
-Minimal fragment (macOS config path: `~/Library/Application Support/Claude/claude_desktop_config.json`):
+Config file location:
+
+| OS | `claude_desktop_config.json` |
+|----|------------------------------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+Minimal fragment:
 
 ```json
 {
@@ -260,13 +268,21 @@ claude mcp add nickol-knx \
   -- /absolute/path/to/.venv/bin/nickol-knx-mcp
 ```
 
-Then drop `CLAUDE.md` into your project root — it acts as an ETS Assistant skill (design rules,
-safety rules, 3-level GA structure, command/status pairing, DPT discipline, naming, KNX Secure
-keyring handling, and the recommended workflow).
+Then drop `CLAUDE.md` into your project root — the design playbook (safety rules, 3-level GA
+structure, command/status pairing, DPT discipline, naming, KNX Secure keyring handling).
+
+### The workflow skill
+
+The tools are the capability; [`skills/nickol-knx`](skills/nickol-knx) is the **order to use
+them in and how to read what they return** — the state model, the route table per starting
+point, and the confidence-tier rules (`explain_ga` provenance, `dpt_source`, the `silent`
+caveat on a recording). Install it into `~/.claude/skills/` for Claude Code, or zip it for
+Claude Desktop — Desktop reads neither this repo's `skills/` directory nor `CLAUDE.md`. See
+[`skills/nickol-knx/README.md`](skills/nickol-knx/README.md).
 
 ---
 
-## MCP tools (31)
+## MCP tools (37)
 
 **Read**
 | Tool | Purpose |
@@ -312,6 +328,27 @@ keyring handling, and the recommended workflow).
 | `generate_knx_iot(output_path?)` | KNX IoT semantic export (Turtle/RDF) |
 | `project_report(output_path?, name_regex?)` | Markdown report |
 | `workspace_info()` | workspace path + safety guarantees |
+
+**Bus-monitor recording** — the project says what a system *should* do; a recording shows what it
+*actually* does, including logic that lives outside ETS entirely (a visualisation server or gateway
+with no ETS application still writes to the bus). Read-only: this reads an exported `CommunicationLog`
+XML, it does **not** connect to a bus. Requires a loaded project — raw frames carry addresses and
+bytes, and only the `.knxproj` turns those into names, datapoint types and *expected* senders.
+| Tool | Purpose |
+|------|---------|
+| `load_telegram_log(path, since?, until?, max_records?, from_end?, change_only=true, dedupe_window?)` | stream an ETS monitor recording and cache it. Returns a **summary only**. `since`/`until` take an ISO timestamp or an offset from the start (`+90m`, `-2h`); `change_only` keeps a telegram only when the value on that address changed (typically an order-of-magnitude reduction), and with `dedupe_window` becomes "every change plus a heartbeat every N seconds" |
+| `log_overview(top?)` | what's in the recording: traffic by main group, by device, busiest addresses, unknown senders |
+| `log_ga_activity(ga?, limit?, senderless_only?, unexpected_sender_only?, min_count?)` | per-GA digest: traffic, senders, value range, `dpt_source`. `ga` accepts an exact address, a prefix (`6/2`), or a zone-template wildcard (`7/x/8`) |
+| `log_series(gas, max_points?, agg?)` | time series for several GAs on **identical buckets**, so two signals can be compared directly — how a control loop that exists in no documentation gets found |
+| `log_reality_check(limit?)` | **observed traffic vs. the project model**: senders absent from ETS; addresses the project says nothing transmits on that really do get written, and by whom; unexpected extra writers; and what never appeared (reported with the caveat that short-recording silence proves nothing) |
+| `log_telegrams(ga?, src?, since?, until?, limit?)` | decoded individual telegrams — last resort, capped at 200; refuses (with the match count) rather than truncating silently |
+
+> **Datapoint types in a recording are often a deduction.** A frame carries bytes, not a type, and
+> many projects leave DPTs unset on group addresses. Every decoded value therefore reports
+> `dpt_source`: `project`/`object` means the type is declared somewhere; `inferred` means it was
+> deduced from payload width and the communication object's function text. An `inferred` value is a
+> deduction, not a fact — and a payload that doesn't fit its type falls back to raw hex rather than
+> producing a plausible wrong number.
 
 **Room Library** (R1 — compose a new project from room templates)
 | Tool | Purpose |
@@ -373,6 +410,7 @@ nickol-knx-mcp/
 ├── nickol_knx_mcp/
 │   ├── dpt_map.py        # DPT → category / kind / HA platform / value_type
 │   ├── project.py        # the ONLY module that reads .knxproj (read-only)
+│   ├── telegramlog.py    # ETS bus-monitor recording: streaming decode + aggregation (read-only)
 │   ├── safexml.py        # hardened ZIP/XML parsing of untrusted .knxproj (zip-bomb / XXE defense)
 │   ├── pairing.py        # command↔status pairing by name tokens
 │   ├── analyze.py        # naming / missing-status / DPT checks
@@ -381,12 +419,14 @@ nickol-knx-mcp/
 │   ├── report.py         # Markdown report
 │   ├── room_library.py   # Room Library R1 — compose a new project from templates
 │   ├── room_templates/   # built-in room YAML templates + SCHEMA.md (public contract)
-│   └── server.py         # FastMCP server, 31 tools, confined writes
+│   └── server.py         # FastMCP server, 37 tools, confined writes
 ├── tests/test_pipeline.py
+├── tests/test_telegramlog.py
 ├── examples/claude_desktop_config.json
 ├── skills/
+│   ├── nickol-knx/       # workflow skill: tool orchestration + how to read the results
 │   └── ha-git-backup/    # ops companion: 2-circuit HA backup (git history + encrypted offsite)
-├── CLAUDE.md             # ETS Assistant skill / playbook
+├── CLAUDE.md             # design playbook (GA structure, DPT, naming, Secure)
 ├── pyproject.toml
 └── README.md
 ```

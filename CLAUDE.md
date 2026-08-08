@@ -68,3 +68,10 @@ shutters, HVAC, sensors, scenes, energy, diagnostics.
 4. `generate_ets_group_addresses` (xml) → import into ETS for any new GAs.
 5. `generate_ha_package` → review YAML → deploy to Home Assistant.
 6. Commit every artifact to Git.
+7. On an installed system, `load_telegram_log` an ETS bus-monitor recording and
+   `log_reality_check` it — the project says what *should* happen, a recording shows
+   what actually does, including logic that lives outside ETS. Treat `inferred` DPTs
+   and the `silent` list as deductions, never as facts.
+
+The full tool-by-tool workflow (which of the 37 tools when, and how to read their
+confidence claims) lives in the `nickol-knx` skill: `skills/nickol-knx/SKILL.md`.

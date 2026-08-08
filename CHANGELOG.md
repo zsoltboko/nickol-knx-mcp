@@ -8,6 +8,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`skills/nickol-knx` — the workflow skill.** The 37 tools were the capability; nothing carried the
+  *order to use them in* or the rules for reading what they return. `CLAUDE.md` names only 5 tools in
+  its workflow, has no frontmatter to trigger on, and is never loaded by Claude Desktop at all; the
+  README's tool table never reaches the model's context. So `explain_ga`'s provenance tiers,
+  `check_policy`'s inferred-taxonomy semantics, `grade_completeness`, `check_device_parameters` and the
+  entire six-tool log-forensics group had no usage guidance anywhere a model would read it.
+
+  A short `SKILL.md` (iron rules, the `load_project`-first state model, a route table by starting
+  point, and the confidence-tier rules) plus six `references/` files that load only when that path is
+  taken: `audit`, `repair`, `generate`, `log-forensics`, `compose`, `design-rules`.
+
+  **The cross-cutting rule it enforces is that graded evidence stays graded.** `explain_ga` ranks
+  signals authoritative (ETS Function) > structural (DPT) > heuristic (name) and reports
+  `confidence: contested` when they disagree; `log_ga_activity` reports `dpt_source`. An `inferred`
+  DPT and a `silent` group address
+  are deductions, and the skill's acceptance test is whether a fresh session says so unprompted.
+
+  Design rules stay in `CLAUDE.md` as the single source — `references/design-rules.md` indexes and
+  points at it rather than copying, so the two cannot drift apart.
+
+- **Bus-monitor recording analysis — six tools** (tool count **31 → 37**; new `telegramlog.py`,
+  `server.py`, `tests/test_telegramlog.py`). Reads an ETS `CommunicationLog` XML export and decodes it
+  *against the loaded project*, which is what turns raw CommonEMI frames into named group addresses,
+  typed values and — crucially — **expected** senders. Still no bus connectivity: this reads a file.
+
+  `load_telegram_log` streams the document (`iterparse` + `clear()`), so a multi-gigabyte capture never
+  lands in memory; a 20 MB / 119k-telegram recording peaks at 13 MB. `log_overview`, `log_ga_activity`,
+  `log_series`, `log_reality_check` and `log_telegrams` query it.
+
+  **`log_reality_check` answers what a project alone cannot:** which devices transmit that are absent
+  from ETS entirely (a visualisation server or gateway with no application is invisible to the project
+  but very much on the bus); which "nothing sends this" addresses really do get written, and by whom;
+  where an address has writers the project does not expect; and what never appeared — the last reported
+  with the caveat that silence over a short recording is not evidence of a dead function.
+
+  **Context economy is a design constraint, not an afterthought.** Aggregates are built during the
+  streaming pass and are always complete, while the record store can be reduced independently:
+  `change_only` keeps a telegram only when the value on that address changed (72% reduction on a real
+  capture), `dedupe_window` turns that into "every change plus a heartbeat every N seconds",
+  `since`/`until` accept an ISO timestamp or an offset from the start (`+90m`), and `max_records` caps
+  the store — with `from_end` to keep the tail. No tool returns telegrams by default; `log_telegrams`
+  is capped at 200 and refuses with the match count rather than truncating silently.
+
+  **Datapoint types are resolved by provenance, not guessed silently.** Order: the GA's own DPT >
+  a linked communication object's DPT > a user override > inference from payload width + object
+  function text > unknown. Every decoded value carries `dpt_source`, so an `inferred` value is
+  visibly a deduction; a payload that doesn't match its type falls back to raw hex rather than
+  producing a plausible wrong number. This matters in practice — projects that never set GA-level
+  DPTs are common, and that is exactly when a recording is most needed.
+
 - **`check_topology()` — topology & individual-address sanity, grounded in the KNX standard** (tool
   count **30 → 31**; `analyze.py`, `server.py`). Flags devices-per-line over the TP1 limits (info at
   >64 per segment, warning at >256 per line — KNX Handbook p.36/40/55), individual addresses that
